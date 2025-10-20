@@ -42,7 +42,7 @@ jobs:
             --server peleus.webuntis.com \
             --token "$WEBUNTIS_TOKEN" \
             --cookies "$WEBUNTIS_COOKIES" \
-            --weeks 8 \
+            --weeks 30 \
             --output webuntis_calendar.ics
 
       - name: Check if calendar changed
