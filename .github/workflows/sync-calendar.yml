@@ -12,6 +12,9 @@ on:
   push:
     branches: [ main, master ]
 
+permissions:
+  contents: write
+
 jobs:
   sync:
     runs-on: ubuntu-latest
@@ -19,8 +22,6 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-        with:
-          token: ${{ secrets.PAT_TOKEN || secrets.GITHUB_TOKEN }}
 
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -57,19 +58,23 @@ jobs:
 
       - name: Deploy to GitHub Pages
         if: steps.check_changes.outputs.changed == 'true'
-        uses: peaceiris/actions-gh-pages@v3
-        with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_dir: .
-          publish_branch: gh-pages
-          keep_files: false
-          force_orphan: true
-          user_name: 'github-actions[bot]'
-          user_email: 'github-actions[bot]@users.noreply.github.com'
-          commit_message: 'Update calendar'
-          # Nur die .ics Datei deployen
-          include_patterns: |
-            webuntis_calendar.ics
+        run: |
+          git config --global user.name 'github-actions[bot]'
+          git config --global user.email 'github-actions[bot]@users.noreply.github.com'
+
+          # Erstelle/Update gh-pages branch
+          git checkout -B gh-pages
+
+          # Entferne alles außer der .ics Datei
+          git rm -rf --quiet --ignore-unmatch .
+          git checkout HEAD -- webuntis_calendar.ics
+
+          # Commit und push
+          git add webuntis_calendar.ics
+          git commit -m "🗓️ Update calendar - $(date +'%Y-%m-%d %H:%M UTC')"
+          git push -f origin gh-pages
+
+          echo "✓ Calendar deployed to GitHub Pages"
 
       - name: No changes
         if: steps.check_changes.outputs.changed == 'false'
