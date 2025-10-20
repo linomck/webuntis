@@ -60,7 +60,7 @@ jobs:
           git config --local user.name "GitHub Actions Bot"
           git add webuntis_calendar.ics
           git commit -m "🗓️ Update calendar - $(date +'%Y-%m-%d %H:%M')"
-          git push
+          git push https://${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git HEAD:${{ github.ref }}
 
       - name: No changes
         if: steps.check_changes.outputs.changed == 'false'
