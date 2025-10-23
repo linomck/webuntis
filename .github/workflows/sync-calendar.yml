@@ -49,21 +49,43 @@ jobs:
         run: |
           python webuntis_to_ical.py --headless --output webuntis_calendar.ics
 
+      - name: Check for changes
+        id: check_changes
+        run: |
+          # Fetch gh-pages branch if it exists
+          git fetch origin gh-pages:gh-pages 2>/dev/null || echo "gh-pages branch doesn't exist yet"
+
+          # Check if calendar file changed
+          if git show gh-pages:webuntis_calendar.ics > /tmp/old_calendar.ics 2>/dev/null; then
+            if diff -q webuntis_calendar.ics /tmp/old_calendar.ics > /dev/null 2>&1; then
+              echo "changed=false" >> $GITHUB_OUTPUT
+              echo "No changes detected in calendar file"
+            else
+              echo "changed=true" >> $GITHUB_OUTPUT
+              echo "Changes detected in calendar file"
+            fi
+          else
+            echo "changed=true" >> $GITHUB_OUTPUT
+            echo "New calendar file (gh-pages branch doesn't exist or file not found)"
+          fi
+
       - name: Deploy to GitHub Pages
-        uses: peaceiris/actions-gh-pages@v4
-        with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_dir: .
-          publish_branch: gh-pages
-          keep_files: false
-          enable_jekyll: false
-          include: |
-            webuntis_calendar.ics
-          exclude: |
-            .github
-            .git
-            .env
-            .env.example
-            *.py
-            *.md
-            requirements.txt
+        if: steps.check_changes.outputs.changed == 'true'
+        run: |
+          git config --global user.name 'github-actions[bot]'
+          git config --global user.email 'github-actions[bot]@users.noreply.github.com'
+          # Erstelle/Update gh-pages branch
+          git checkout -B gh-pages
+          # Entferne alles außer der .ics Datei
+          git rm -rf --quiet --ignore-unmatch .
+          git checkout HEAD -- webuntis_calendar.ics
+          # Commit und push
+          git add webuntis_calendar.ics
+          git commit -m "🗓️ Update calendar - $(date +'%Y-%m-%d %H:%M UTC')"
+          git push -f origin gh-pages
+          echo "✓ Calendar deployed to GitHub Pages"
+
+      - name: No changes
+        if: steps.check_changes.outputs.changed == 'false'
+        run: |
+          echo "ℹ️ Calendar file unchanged - skipping deployment"
