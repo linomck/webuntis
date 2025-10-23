@@ -192,7 +192,8 @@ class WebUntisCalendarSync:
             return {}
 
     def convert_to_ical(self, timetable_data: Dict, timezone: str = 'Europe/Berlin',
-                       filter_type: Optional[str] = None, calendar_name_suffix: str = '') -> Calendar:
+                       filter_type: Optional[str] = None, exclude_type: Optional[str] = None,
+                       calendar_name_suffix: str = '') -> Calendar:
         """
         Convert WebUntis timetable data to iCal format
 
@@ -200,6 +201,7 @@ class WebUntisCalendarSync:
             timetable_data: Timetable data from WebUntis API
             timezone: Timezone for events (default: Europe/Berlin)
             filter_type: Optional filter to only include specific event types (e.g., 'EXAM')
+            exclude_type: Optional filter to exclude specific event types (e.g., 'EXAM')
             calendar_name_suffix: Optional suffix for calendar name
 
         Returns:
@@ -232,6 +234,10 @@ class WebUntisCalendarSync:
 
                 # Apply filter if specified
                 if filter_type and entry_type != filter_type:
+                    continue
+
+                # Apply exclusion filter if specified
+                if exclude_type and entry_type == exclude_type:
                     continue
                 event = Event()
 
@@ -277,8 +283,11 @@ class WebUntisCalendarSync:
                 status = entry.get('status', 'REGULAR')
                 entry_type = entry.get('type', 'NORMAL_TEACHING_PERIOD')
 
-                # Build event
-                event.add('summary', f"{subject}")
+                # Build event summary with KA: prefix for exams
+                if entry_type == 'EXAM':
+                    event.add('summary', f"KA: {subject}")
+                else:
+                    event.add('summary', f"{subject}")
 
                 # Build description
                 description_parts = []
@@ -366,9 +375,9 @@ class WebUntisCalendarSync:
             print("✗ No timetable data received")
             return False
 
-        # Convert to iCal - All events
-        print("\nConverting to iCal format (all events)...")
-        calendar = self.convert_to_ical(timetable_data)
+        # Convert to iCal - All events except exams
+        print("\nConverting to iCal format (all events except exams)...")
+        calendar = self.convert_to_ical(timetable_data, exclude_type='EXAM')
 
         # Save all events calendar
         self.save_ical(calendar, output_file)
@@ -385,8 +394,8 @@ class WebUntisCalendarSync:
         print("✓ Sync completed successfully!")
         print("=" * 60)
         print("\nGenerated files:")
-        print(f"  - {output_file} (all events)")
-        print(f"  - {exams_output_file} (exams only)")
+        print(f"  - {output_file} (all events EXCEPT exams)")
+        print(f"  - {exams_output_file} (exams only, with 'KA:' prefix)")
         print("\nTo add to iPhone:")
         print("1. Email the .ics file to yourself")
         print("2. Open the email on your iPhone")
