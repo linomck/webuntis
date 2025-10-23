@@ -49,7 +49,7 @@ jobs:
 
       - name: Run calendar sync
         run: |
-          python webuntis_to_ical.py --headless --output webuntis_calendar.ics
+          python webuntis_to_ical.py --headless --output webuntis_calendar.ics --weeks 52
 
       - name: Check for changes
         id: check_changes
