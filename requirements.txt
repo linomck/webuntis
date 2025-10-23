@@ -1,3 +1,17 @@
-requests>=2.31.0
-icalendar>=5.0.11
-pytz>=2024.1
+# Python dependencies for WebUntis Auto-Login
+
+# Selenium for browser automation
+selenium==4.15.0
+
+# WebDriver Manager for automatic driver installation
+webdriver-manager==4.0.1
+
+# Python-dotenv for environment variable management
+python-dotenv==1.0.0
+
+# iCalendar for creating .ics files
+icalendar==5.0.11
+
+# Timezone support
+pytz==2023.3
+

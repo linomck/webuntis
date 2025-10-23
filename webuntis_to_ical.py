@@ -26,152 +26,80 @@ Required headers:
 
 import requests
 import json
+import os
+import time
 from datetime import datetime, timedelta
 from icalendar import Calendar, Event
 from typing import List, Dict, Optional
 import pytz
+from webuntis_auto_login import WebUntisAutoLogin
 
 
 class WebUntisCalendarSync:
-    def __init__(self, server: str, school: str = None, username: str = None,
-                 password: str = None, session_token: str = None, cookies: str = None):
+    def __init__(self, server: str, session_data: dict = None, school: str = None):
         """
         Initialize the WebUntis Calendar Sync
 
         Args:
             server: WebUntis server (e.g., 'peleus.webuntis.com')
-            school: School name/identifier (required if using username/password)
-            username: Your WebUntis username (optional if using session_token)
-            password: Your WebUntis password (optional if using session_token)
-            session_token: Existing session token (Bearer JWT) from browser
-            cookies: Cookie string from browser (format: "name1=value1; name2=value2")
+            session_data: Session data dictionary from WebUntisAutoLogin containing cookies, bearer_token, person_id, tenant_id
+            school: School name/identifier (optional, for backward compatibility)
         """
         self.server = server
         self.school = school
-        self.username = username
-        self.password = password
         self.base_url = f"https://{server}/WebUntis"
 
         self.session = requests.Session()
-        self.bearer_token = session_token
+        self.bearer_token = None
         self.tenant_id = None
         self.person_id = None
         self.school_year_id = None
+        self.username = None
 
-        # If cookies provided, add them to session
-        if cookies:
-            self._parse_cookies(cookies)
+        # If session_data provided, load cookies and token from it
+        if session_data:
+            self._load_session_data(session_data)
 
-        # If session token provided, extract info from it
-        if session_token:
-            self._parse_session_token(session_token)
-
-    def _parse_cookies(self, cookie_string: str):
-        """Parse cookie string and add to session"""
+    def _load_session_data(self, session_data: dict):
+        """Load session data from WebUntisAutoLogin"""
         try:
-            # Parse cookies from string format "name1=value1; name2=value2"
-            for cookie in cookie_string.split(';'):
-                cookie = cookie.strip()
-                if '=' in cookie:
-                    name, value = cookie.split('=', 1)
-                    self.session.cookies.set(name, value, domain=self.server)
-            print(f"✓ Added {len(self.session.cookies)} cookies to session")
-        except Exception as e:
-            print(f"Warning: Could not parse cookies: {str(e)}")
+            print("✓ Loading session data from auto login")
 
-    def _parse_session_token(self, token: str):
-        """Parse session token to extract tenant_id and person_id"""
-        try:
-            import base64
-            payload = token.split('.')[1]
-            # Add padding if needed
-            payload += '=' * (4 - len(payload) % 4)
-            decoded = json.loads(base64.b64decode(payload))
+            cookies = session_data.get('cookies', [])
+            self.bearer_token = session_data.get('bearer_token')
+            self.person_id = session_data.get('person_id')
+            self.tenant_id = session_data.get('tenant_id')
+            saved_time = session_data.get('timestamp', 0)
 
-            self.tenant_id = decoded.get('tenant_id')
-            self.person_id = decoded.get('person_id')
-            self.username = decoded.get('username', 'user')
+            # Calculate age
+            age_minutes = (time.time() - saved_time) / 60
+            print(f"  Session age: {age_minutes:.1f} minutes")
 
-            print(f"✓ Parsed session token")
-            print(f"  Username: {self.username}")
-            print(f"  Person ID: {self.person_id}")
-            print(f"  Tenant ID: {self.tenant_id}")
+            # Load cookies into session
+            for cookie in cookies:
+                self.session.cookies.set(
+                    name=cookie.get('name'),
+                    value=cookie.get('value'),
+                    domain=cookie.get('domain'),
+                    path=cookie.get('path', '/'),
+                    secure=cookie.get('secure', False)
+                )
 
-        except Exception as e:
-            print(f"Warning: Could not parse session token: {str(e)}")
+            print(f"✓ Loaded {len(cookies)} cookies")
 
-    def login(self) -> bool:
-        """
-        Authenticate with WebUntis using JSON-RPC API
-
-        Returns:
-            True if login successful, False otherwise
-        """
-        url = f"{self.base_url}/jsonrpc.do"
-        params = {"school": self.school}
-
-        payload = {
-            "id": "request_id",
-            "method": "authenticate",
-            "params": {
-                "user": self.username,
-                "password": self.password,
-                "client": "PythonSync"
-            },
-            "jsonrpc": "2.0"
-        }
-
-        try:
-            response = self.session.post(url, json=payload, params=params)
-            response.raise_for_status()
-
-            result = response.json()
-
-            if "result" in result:
-                # Store session info
-                session_id = result["result"]["sessionId"]
-                self.person_id = result["result"]["personId"]
-
-                # Get bearer token
-                self._get_bearer_token()
-
-                print(f"✓ Successfully logged in as {self.username}")
+            # Check if bearer token is available
+            if self.bearer_token:
+                print(f"✓ Bearer token loaded from session")
                 print(f"  Person ID: {self.person_id}")
-                return True
+                print(f"  Tenant ID: {self.tenant_id}")
             else:
-                print(f"✗ Login failed: {result.get('error', {}).get('message', 'Unknown error')}")
-                return False
+                print(f"  ⚠ No bearer token in session data")
 
         except Exception as e:
-            print(f"✗ Login error: {str(e)}")
-            return False
+            print(f"✗ Error loading session data: {str(e)}")
+            import traceback
+            traceback.print_exc()
 
-    def _get_bearer_token(self):
-        """Get/refresh the Bearer token for REST API calls"""
-        url = f"{self.base_url}/api/token/new"
-
-        try:
-            response = self.session.get(url)
-            response.raise_for_status()
-
-            self.bearer_token = response.text.strip('"')
-
-            # Extract tenant_id from token payload (JWT)
-            import base64
-            payload = self.bearer_token.split('.')[1]
-            # Add padding if needed
-            payload += '=' * (4 - len(payload) % 4)
-            decoded = json.loads(base64.b64decode(payload))
-
-            self.tenant_id = decoded.get('tenant_id')
-            self.person_id = decoded.get('person_id', self.person_id)
-
-            # Get school year ID from headers if available
-            if 'x-sessiondurationmilliseconds' in response.headers:
-                print(f"  Session duration: {int(response.headers['x-sessiondurationmilliseconds'])/60000:.0f} minutes")
-
-        except Exception as e:
-            print(f"Warning: Could not get bearer token: {str(e)}")
 
     def get_school_years(self) -> List[Dict]:
         """Get available school years"""
@@ -239,60 +167,29 @@ class WebUntisCalendarSync:
             'x-webuntis-api-school-year-id': str(self.school_year_id)
         }
 
-        print(f"\n  Requesting timetable with:")
-        print(f"    School Year ID: {self.school_year_id}")
-        print(f"    Person ID: {self.person_id}")
-        print(f"    Tenant ID: {self.tenant_id}")
-        print(f"    Token (first 50 chars): {self.bearer_token[:50]}...")
-        print(f"\n  Headers being sent:")
-        for key, value in headers.items():
-            if key == 'Authorization':
-                print(f"    {key}: Bearer {value.split('Bearer ')[1][:50]}...")
-            else:
-                print(f"    {key}: {value}")
-        print(f"\n  Full URL: {url}")
+        print(f"\nFetching timetable from {start_date.strftime('%Y-%m-%d')} to {end_date.strftime('%Y-%m-%d')}...")
 
         try:
             response = self.session.get(url, params=params, headers=headers)
-            print(f"\n    Response status: {response.status_code}")
-
-            if response.status_code != 200:
-                print(f"    Response headers: {dict(response.headers)}")
-                try:
-                    print(f"    Response body: {response.text[:500]}")
-                except:
-                    pass
 
             if response.status_code == 401:
-                if retry_with_refresh:
-                    print(f"\n  Token expired, attempting to refresh...")
-                    self._refresh_token()
-                    if self.bearer_token:
-                        print(f"  Token refreshed! Retrying...")
-                        return self.fetch_timetable(start_date, end_date, retry_with_refresh=False)
-
-                print(f"\n✗ Authentication failed. Possible reasons:")
-                print(f"  - Token expired and refresh failed")
-                print(f"  - Get a fresh token from your browser")
-                print(f"  - Make sure you're logged in to WebUntis")
+                print(f"\n✗ Authentication failed. Session may have expired.")
+                print(f"  Please run the script again to re-authenticate.")
+                return {}
 
             response.raise_for_status()
 
-            return response.json()
+            data = response.json()
+
+            # Count events
+            event_count = sum(len(day.get('gridEntries', [])) for day in data.get('days', []))
+            print(f"✓ Fetched {event_count} timetable entries")
+
+            return data
 
         except Exception as e:
             print(f"✗ Error fetching timetable: {str(e)}")
             return {}
-
-    def _refresh_token(self):
-        """Try to refresh the Bearer token using the current session"""
-        print(f"  ⚠ Token refresh not supported without session cookies")
-        print(f"  Please get a fresh token from your browser:")
-        print(f"    1. Press F12 → Network tab")
-        print(f"    2. Refresh page")
-        print(f"    3. Click any API request")
-        print(f"    4. Copy the 'Authorization: Bearer ...' token")
-        return False
 
     def convert_to_ical(self, timetable_data: Dict, timezone: str = 'Europe/Berlin') -> Calendar:
         """
@@ -426,12 +323,10 @@ class WebUntisCalendarSync:
         print("WebUntis to iPhone Calendar Sync")
         print("=" * 60)
 
-        # Login only if we don't have a session token
+        # Check if we have a bearer token
         if not self.bearer_token:
-            if not self.login():
-                return False
-        else:
-            print("\nUsing provided session token...")
+            print("\n✗ No session token found. Please provide credentials or session file.")
+            return False
 
         # Get school years
         self.get_school_years()
@@ -439,8 +334,6 @@ class WebUntisCalendarSync:
         # Calculate date range
         start_date = datetime.now()
         end_date = start_date + timedelta(weeks=weeks_ahead)
-
-        print(f"\nFetching timetable from {start_date.strftime('%Y-%m-%d')} to {end_date.strftime('%Y-%m-%d')}...")
 
         # Fetch timetable
         timetable_data = self.fetch_timetable(start_date, end_date)
@@ -457,7 +350,7 @@ class WebUntisCalendarSync:
         self.save_ical(calendar, output_file)
 
         print("\n" + "=" * 60)
-        print("Sync completed successfully!")
+        print("✓ Sync completed successfully!")
         print("=" * 60)
         print("\nTo add to iPhone:")
         print("1. Email the .ics file to yourself")
@@ -489,61 +382,72 @@ class WebUntisCalendarSync:
 
 
 def main():
-    """Example usage"""
+    """Main entry point - performs auto login and syncs calendar"""
     import argparse
+    from dotenv import load_dotenv
+
+    load_dotenv()
 
     parser = argparse.ArgumentParser(
         description='Sync WebUntis timetable to iPhone Calendar',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Using session token (recommended - get from browser DevTools):
-  python webuntis_calendar_sync.py --server peleus.webuntis.com --token "eyJraWQi..."
+  # Using credentials from .env file:
+  python webuntis_to_ical.py
 
-  # Using username/password:
-  python webuntis_calendar_sync.py --server peleus.webuntis.com --school "SchoolName" \\
-      --username "student123" --password "mypassword"
+  # Specify number of weeks and output file:
+  python webuntis_to_ical.py --weeks 8 --output my_calendar.ics
 
-To get your session token:
-  1. Open WebUntis in your browser
-  2. Login normally
-  3. Open Developer Tools (F12)
-  4. Go to Network tab
-  5. Click on any API request
-  6. Copy the "authorization: Bearer ..." header value (the long JWT token)
+  # Run in headless mode:
+  python webuntis_to_ical.py --headless
         """
     )
-    parser.add_argument('--server', required=True, help='WebUntis server (e.g., peleus.webuntis.com)')
-    parser.add_argument('--token', '--session-token', dest='token', help='Session token (Bearer JWT from browser)')
-    parser.add_argument('--cookies', help='Cookies from browser (format: "name1=value1; name2=value2")')
-    parser.add_argument('--school', help='School name/identifier (required if using username/password)')
-    parser.add_argument('--username', help='Your WebUntis username')
-    parser.add_argument('--password', help='Your WebUntis password')
-    parser.add_argument('--weeks', type=int, default=4, help='Number of weeks to fetch (default: 4)')
-    parser.add_argument('--output', default='webuntis_calendar.ics', help='Output filename (default: webuntis_calendar.ics)')
-    parser.add_argument('--timezone', default='Europe/Berlin', help='Timezone (default: Europe/Berlin)')
+    parser.add_argument('--server', default='peleus.webuntis.com',
+                        help='WebUntis server (default: peleus.webuntis.com)')
+    parser.add_argument('--weeks', type=int, default=4,
+                        help='Number of weeks to fetch (default: 4)')
+    parser.add_argument('--output', default='webuntis_calendar.ics',
+                        help='Output filename (default: webuntis_calendar.ics)')
+    parser.add_argument('--headless', action='store_true',
+                        help='Run browser in headless mode')
 
     args = parser.parse_args()
 
-    # Validate authentication method
-    if not args.token and not (args.school and args.username and args.password):
-        parser.error("Either --token or (--school, --username, --password) must be provided")
+    # Get credentials from environment
+    username = os.getenv("FSV_USERNAME")
+    password = os.getenv("FSV_PASSWORD")
 
+    if not username or not password:
+        print("✗ FSV_USERNAME and FSV_PASSWORD must be set in .env file")
+        print("\nExample .env file:")
+        print("FSV_USERNAME=your_username")
+        print("FSV_PASSWORD=your_password")
+        return
+
+    # Perform auto login
+    print("Performing auto login to WebUntis...")
+    with WebUntisAutoLogin(username, password, headless=args.headless) as auto_login:
+        session_data = auto_login.login()
+
+        if not session_data:
+            print("✗ Auto login failed. Cannot proceed with calendar sync.")
+            return
+
+        print("\nSession data received, initializing calendar sync...")
+
+    # Create sync instance with session data
     sync = WebUntisCalendarSync(
         server=args.server,
-        school=args.school,
-        username=args.username,
-        password=args.password,
-        session_token=args.token,
-        cookies=args.cookies
+        session_data=session_data
     )
 
     try:
         sync.sync(weeks_ahead=args.weeks, output_file=args.output)
     finally:
-        if not args.token:  # Only logout if we logged in with credentials
-            sync.logout()
+        sync.logout()
 
 
 if __name__ == '__main__':
     main()
+
