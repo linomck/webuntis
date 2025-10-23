@@ -49,7 +49,7 @@ jobs:
 
       - name: Run calendar sync
         run: |
-          python webuntis_to_ical.py --headless --output webuntis_calendar.ics --weeks 52
+          python webuntis_to_ical.py --headless --output webuntis_calendar.ics --exams-output webuntis_exams.ics --weeks 52
 
       - name: Check for changes
         id: check_changes
@@ -57,18 +57,35 @@ jobs:
           # Fetch gh-pages branch if it exists
           git fetch origin gh-pages:gh-pages 2>/dev/null || echo "gh-pages branch doesn't exist yet"
 
-          # Check if calendar file changed
+          CHANGED=false
+
+          # Check if main calendar file changed
           if git show gh-pages:webuntis_calendar.ics > /tmp/old_calendar.ics 2>/dev/null; then
-            if diff -q webuntis_calendar.ics /tmp/old_calendar.ics > /dev/null 2>&1; then
-              echo "changed=false" >> $GITHUB_OUTPUT
-              echo "No changes detected in calendar file"
-            else
-              echo "changed=true" >> $GITHUB_OUTPUT
-              echo "Changes detected in calendar file"
+            if ! diff -q webuntis_calendar.ics /tmp/old_calendar.ics > /dev/null 2>&1; then
+              CHANGED=true
+              echo "Changes detected in main calendar file"
             fi
           else
+            CHANGED=true
+            echo "New main calendar file (gh-pages branch doesn't exist or file not found)"
+          fi
+
+          # Check if exams calendar file changed
+          if git show gh-pages:webuntis_exams.ics > /tmp/old_exams.ics 2>/dev/null; then
+            if ! diff -q webuntis_exams.ics /tmp/old_exams.ics > /dev/null 2>&1; then
+              CHANGED=true
+              echo "Changes detected in exams calendar file"
+            fi
+          else
+            CHANGED=true
+            echo "New exams calendar file (gh-pages branch doesn't exist or file not found)"
+          fi
+
+          if [ "$CHANGED" = true ]; then
             echo "changed=true" >> $GITHUB_OUTPUT
-            echo "New calendar file (gh-pages branch doesn't exist or file not found)"
+          else
+            echo "changed=false" >> $GITHUB_OUTPUT
+            echo "No changes detected in calendar files"
           fi
 
       - name: Deploy to GitHub Pages
@@ -82,8 +99,9 @@ jobs:
           # Configure git to use the GitHub token
           git remote set-url origin https://x-access-token:${GITHUB_TOKEN}@github.com/${{ github.repository }}.git
 
-          # Save calendar file to temp location
+          # Save calendar files to temp location
           cp webuntis_calendar.ics /tmp/webuntis_calendar.ics
+          cp webuntis_exams.ics /tmp/webuntis_exams.ics
 
           # Create/Update gh-pages branch
           git checkout -B gh-pages
@@ -91,16 +109,17 @@ jobs:
           # Remove all files
           git rm -rf --quiet --ignore-unmatch .
 
-          # Restore calendar file from temp location
+          # Restore calendar files from temp location
           cp /tmp/webuntis_calendar.ics webuntis_calendar.ics
+          cp /tmp/webuntis_exams.ics webuntis_exams.ics
 
           # Commit and push
-          git add webuntis_calendar.ics
-          git commit -m "🗓️ Update calendar - $(date +'%Y-%m-%d %H:%M UTC')"
+          git add webuntis_calendar.ics webuntis_exams.ics
+          git commit -m "🗓️ Update calendars - $(date +'%Y-%m-%d %H:%M UTC')"
           git push -f origin gh-pages
-          echo "✓ Calendar deployed to GitHub Pages"
+          echo "✓ Calendars deployed to GitHub Pages"
 
       - name: No changes
         if: steps.check_changes.outputs.changed == 'false'
         run: |
-          echo "ℹ️ Calendar file unchanged - skipping deployment"
+          echo "ℹ️ Calendar files unchanged - skipping deployment"

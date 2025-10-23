@@ -191,13 +191,16 @@ class WebUntisCalendarSync:
             print(f"✗ Error fetching timetable: {str(e)}")
             return {}
 
-    def convert_to_ical(self, timetable_data: Dict, timezone: str = 'Europe/Berlin') -> Calendar:
+    def convert_to_ical(self, timetable_data: Dict, timezone: str = 'Europe/Berlin',
+                       filter_type: Optional[str] = None, calendar_name_suffix: str = '') -> Calendar:
         """
         Convert WebUntis timetable data to iCal format
 
         Args:
             timetable_data: Timetable data from WebUntis API
             timezone: Timezone for events (default: Europe/Berlin)
+            filter_type: Optional filter to only include specific event types (e.g., 'EXAM')
+            calendar_name_suffix: Optional suffix for calendar name
 
         Returns:
             Calendar object
@@ -207,7 +210,11 @@ class WebUntisCalendarSync:
         cal.add('version', '2.0')
         cal.add('calscale', 'GREGORIAN')
         cal.add('method', 'PUBLISH')
-        cal.add('x-wr-calname', f'WebUntis - {self.username}')
+
+        cal_name = f'WebUntis - {self.username}'
+        if calendar_name_suffix:
+            cal_name += f' - {calendar_name_suffix}'
+        cal.add('x-wr-calname', cal_name)
         cal.add('x-wr-timezone', timezone)
 
         tz = pytz.timezone(timezone)
@@ -220,6 +227,12 @@ class WebUntisCalendarSync:
             entries = day.get('gridEntries', [])
 
             for entry in entries:
+                # Get status and type early to filter
+                entry_type = entry.get('type', 'NORMAL_TEACHING_PERIOD')
+
+                # Apply filter if specified
+                if filter_type and entry_type != filter_type:
+                    continue
                 event = Event()
 
                 # Get duration
@@ -311,13 +324,15 @@ class WebUntisCalendarSync:
             f.write(calendar.to_ical())
         print(f"✓ Saved calendar to: {filename}")
 
-    def sync(self, weeks_ahead: int = 4, output_file: str = 'webuntis_calendar.ics'):
+    def sync(self, weeks_ahead: int = 4, output_file: str = 'webuntis_calendar.ics',
+             exams_output_file: str = 'webuntis_exams.ics'):
         """
         Main sync function
 
         Args:
             weeks_ahead: Number of weeks to fetch (default: 4)
-            output_file: Output .ics filename
+            output_file: Output .ics filename for all events
+            exams_output_file: Output .ics filename for exams only
         """
         print("=" * 60)
         print("WebUntis to iPhone Calendar Sync")
@@ -342,16 +357,27 @@ class WebUntisCalendarSync:
             print("✗ No timetable data received")
             return False
 
-        # Convert to iCal
-        print("\nConverting to iCal format...")
+        # Convert to iCal - All events
+        print("\nConverting to iCal format (all events)...")
         calendar = self.convert_to_ical(timetable_data)
 
-        # Save
+        # Save all events calendar
         self.save_ical(calendar, output_file)
+
+        # Convert to iCal - Exams only
+        print("\nConverting to iCal format (exams only)...")
+        exams_calendar = self.convert_to_ical(timetable_data, filter_type='EXAM',
+                                              calendar_name_suffix='Exams')
+
+        # Save exams calendar
+        self.save_ical(exams_calendar, exams_output_file)
 
         print("\n" + "=" * 60)
         print("✓ Sync completed successfully!")
         print("=" * 60)
+        print("\nGenerated files:")
+        print(f"  - {output_file} (all events)")
+        print(f"  - {exams_output_file} (exams only)")
         print("\nTo add to iPhone:")
         print("1. Email the .ics file to yourself")
         print("2. Open the email on your iPhone")
@@ -408,7 +434,9 @@ Examples:
     parser.add_argument('--weeks', type=int, default=4,
                         help='Number of weeks to fetch (default: 4)')
     parser.add_argument('--output', default='webuntis_calendar.ics',
-                        help='Output filename (default: webuntis_calendar.ics)')
+                        help='Output filename for all events (default: webuntis_calendar.ics)')
+    parser.add_argument('--exams-output', default='webuntis_exams.ics',
+                        help='Output filename for exams only (default: webuntis_exams.ics)')
     parser.add_argument('--headless', action='store_true',
                         help='Run browser in headless mode')
 
@@ -443,7 +471,8 @@ Examples:
     )
 
     try:
-        sync.sync(weeks_ahead=args.weeks, output_file=args.output)
+        sync.sync(weeks_ahead=args.weeks, output_file=args.output,
+                  exams_output_file=args.exams_output)
     finally:
         sync.logout()
 
