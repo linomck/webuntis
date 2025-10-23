@@ -17,6 +17,8 @@ on:
 jobs:
   sync-calendar:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
 
     steps:
       - name: Checkout repository
@@ -71,9 +73,14 @@ jobs:
 
       - name: Deploy to GitHub Pages
         if: steps.check_changes.outputs.changed == 'true'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           git config --global user.name 'github-actions[bot]'
           git config --global user.email 'github-actions[bot]@users.noreply.github.com'
+
+          # Configure git to use the GitHub token
+          git remote set-url origin https://x-access-token:${GITHUB_TOKEN}@github.com/${{ github.repository }}.git
 
           # Save calendar file to temp location
           cp webuntis_calendar.ics /tmp/webuntis_calendar.ics
