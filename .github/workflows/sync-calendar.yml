@@ -74,12 +74,20 @@ jobs:
         run: |
           git config --global user.name 'github-actions[bot]'
           git config --global user.email 'github-actions[bot]@users.noreply.github.com'
-          # Erstelle/Update gh-pages branch
+
+          # Save calendar file to temp location
+          cp webuntis_calendar.ics /tmp/webuntis_calendar.ics
+
+          # Create/Update gh-pages branch
           git checkout -B gh-pages
-          # Entferne alles außer der .ics Datei
+
+          # Remove all files
           git rm -rf --quiet --ignore-unmatch .
-          git checkout HEAD -- webuntis_calendar.ics
-          # Commit und push
+
+          # Restore calendar file from temp location
+          cp /tmp/webuntis_calendar.ics webuntis_calendar.ics
+
+          # Commit and push
           git add webuntis_calendar.ics
           git commit -m "🗓️ Update calendar - $(date +'%Y-%m-%d %H:%M UTC')"
           git push -f origin gh-pages
