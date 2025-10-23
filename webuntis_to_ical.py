@@ -342,8 +342,54 @@ class WebUntisCalendarSync:
             f.write(calendar.to_ical())
         print(f"✓ Saved calendar to: {filename}")
 
+    def send_discord_notification(self, webhook_url: str, message: str, changes_summary: dict = None):
+        """
+        Send a notification to Discord webhook
+
+        Args:
+            webhook_url: Discord webhook URL
+            message: Main message to send
+            changes_summary: Optional dictionary with change details
+        """
+        try:
+            payload = {
+                "content": message,
+                "embeds": []
+            }
+
+            if changes_summary:
+                embed = {
+                    "title": "📅 WebUntis Calendar Update",
+                    "color": 3447003,  # Blue color
+                    "fields": [],
+                    "timestamp": datetime.now().isoformat()
+                }
+
+                if changes_summary.get('regular_events'):
+                    embed["fields"].append({
+                        "name": "Regular Events",
+                        "value": f"{changes_summary['regular_events']} events",
+                        "inline": True
+                    })
+
+                if changes_summary.get('exams'):
+                    embed["fields"].append({
+                        "name": "Exams (Klassenarbeiten)",
+                        "value": f"{changes_summary['exams']} exams",
+                        "inline": True
+                    })
+
+                payload["embeds"].append(embed)
+
+            response = self.session.post(webhook_url, json=payload)
+            response.raise_for_status()
+            print(f"✓ Discord notification sent successfully")
+
+        except Exception as e:
+            print(f"⚠ Warning: Failed to send Discord notification: {str(e)}")
+
     def sync(self, weeks_ahead: int = 4, output_file: str = 'webuntis_calendar.ics',
-             exams_output_file: str = 'webuntis_exams.ics'):
+             exams_output_file: str = 'webuntis_exams.ics', discord_webhook: str = None):
         """
         Main sync function
 
@@ -351,6 +397,7 @@ class WebUntisCalendarSync:
             weeks_ahead: Number of weeks to fetch (default: 4)
             output_file: Output .ics filename for all events
             exams_output_file: Output .ics filename for exams only
+            discord_webhook: Optional Discord webhook URL for change notifications
         """
         print("=" * 60)
         print("WebUntis to iPhone Calendar Sync")
@@ -375,6 +422,21 @@ class WebUntisCalendarSync:
             print("✗ No timetable data received")
             return False
 
+        # Check if old files exist for change detection
+        old_calendar_exists = os.path.exists(output_file)
+        old_exams_exists = os.path.exists(exams_output_file)
+
+        old_calendar_content = None
+        old_exams_content = None
+
+        if old_calendar_exists:
+            with open(output_file, 'rb') as f:
+                old_calendar_content = f.read()
+
+        if old_exams_exists:
+            with open(exams_output_file, 'rb') as f:
+                old_exams_content = f.read()
+
         # Convert to iCal - All events except exams
         print("\nConverting to iCal format (all events except exams)...")
         calendar = self.convert_to_ical(timetable_data, exclude_type='EXAM')
@@ -389,6 +451,43 @@ class WebUntisCalendarSync:
 
         # Save exams calendar
         self.save_ical(exams_calendar, exams_output_file)
+
+        # Check for changes and send Discord notification if needed
+        if discord_webhook:
+            calendar_changed = False
+            exams_changed = False
+
+            new_calendar_content = calendar.to_ical()
+            new_exams_content = exams_calendar.to_ical()
+
+            if old_calendar_content is None or old_calendar_content != new_calendar_content:
+                calendar_changed = True
+
+            if old_exams_content is None or old_exams_content != new_exams_content:
+                exams_changed = True
+
+            if calendar_changed or exams_changed:
+                # Count events
+                regular_event_count = len([c for c in calendar.walk() if c.name == 'VEVENT'])
+                exam_count = len([c for c in exams_calendar.walk() if c.name == 'VEVENT'])
+
+                changes_summary = {
+                    'regular_events': regular_event_count,
+                    'exams': exam_count
+                }
+
+                message = "🔔 WebUntis calendar has been updated!"
+                if calendar_changed and exams_changed:
+                    message += " Both regular events and exams have changed."
+                elif calendar_changed:
+                    message += " Regular events have changed."
+                elif exams_changed:
+                    message += " Exams have changed."
+
+                print("\nDetected changes in calendar - sending Discord notification...")
+                self.send_discord_notification(discord_webhook, message, changes_summary)
+            else:
+                print("\nNo changes detected - skipping Discord notification")
 
         print("\n" + "=" * 60)
         print("✓ Sync completed successfully!")
@@ -463,13 +562,18 @@ Examples:
     # Get credentials from environment
     username = os.getenv("FSV_USERNAME")
     password = os.getenv("FSV_PASSWORD")
+    discord_webhook = os.getenv("DISCORD_WEBHOOK_URL")
 
     if not username or not password:
         print("✗ FSV_USERNAME and FSV_PASSWORD must be set in .env file")
         print("\nExample .env file:")
         print("FSV_USERNAME=your_username")
         print("FSV_PASSWORD=your_password")
+        print("DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/... (optional)")
         return
+
+    if discord_webhook:
+        print(f"✓ Discord webhook configured for notifications")
 
     # Perform auto login
     print("Performing auto login to WebUntis...")
@@ -490,7 +594,7 @@ Examples:
 
     try:
         sync.sync(weeks_ahead=args.weeks, output_file=args.output,
-                  exams_output_file=args.exams_output)
+                  exams_output_file=args.exams_output, discord_webhook=discord_webhook)
     finally:
         sync.logout()
 

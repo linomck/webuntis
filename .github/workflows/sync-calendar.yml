@@ -46,9 +46,37 @@ jobs:
         run: |
           echo "FSV_USERNAME=${{ secrets.FSV_USERNAME }}" > .env
           echo "FSV_PASSWORD=${{ secrets.FSV_PASSWORD }}" >> .env
+          echo "DISCORD_WEBHOOK_URL=${{ secrets.DISCORD_WEBHOOK_URL }}" >> .env
+
+      - name: Fetch old calendar files from gh-pages
+        run: |
+          # Fetch gh-pages branch
+          git fetch origin gh-pages:gh-pages 2>/dev/null || echo "gh-pages branch doesn't exist yet"
+
+          # Copy old calendar files if they exist
+          if git show gh-pages:webuntis_calendar.ics > webuntis_calendar.ics.old 2>/dev/null; then
+            echo "✓ Old main calendar file retrieved"
+          else
+            echo "ℹ️ No old main calendar file found"
+          fi
+
+          if git show gh-pages:webuntis_exams.ics > webuntis_exams.ics.old 2>/dev/null; then
+            echo "✓ Old exams calendar file retrieved"
+          else
+            echo "ℹ️ No old exams calendar file found"
+          fi
 
       - name: Run calendar sync
         run: |
+          # Rename old files to the expected names for comparison
+          if [ -f webuntis_calendar.ics.old ]; then
+            mv webuntis_calendar.ics.old webuntis_calendar.ics
+          fi
+          if [ -f webuntis_exams.ics.old ]; then
+            mv webuntis_exams.ics.old webuntis_exams.ics
+          fi
+
+          # Run sync (will detect changes and send Discord notification if configured)
           python webuntis_to_ical.py --headless --output webuntis_calendar.ics --exams-output webuntis_exams.ics --weeks 52
 
       - name: Check for changes
