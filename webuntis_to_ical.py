@@ -342,33 +342,88 @@ class WebUntisCalendarSync:
             f.write(calendar.to_ical())
         print(f"✓ Saved calendar to: {filename}")
 
-    def _get_event_signatures(self, calendar: Calendar) -> set:
+    def _get_event_map(self, calendar: Calendar) -> dict:
         """
-        Extract event signatures (excluding timestamps) for comparison
+        Extract event map with UID as key and status/type information
 
         Args:
             calendar: Calendar object
 
         Returns:
-            Set of event signatures (tuples of UID, SUMMARY, DTSTART, DTEND, LOCATION, DESCRIPTION)
+            Dictionary with UID as key and dict with event details
         """
-        signatures = set()
+        event_map = {}
 
         for component in calendar.walk():
             if component.name == 'VEVENT':
                 uid = str(component.get('UID', ''))
                 summary = str(component.get('SUMMARY', ''))
-                dtstart = str(component.get('DTSTART', ''))
-                dtend = str(component.get('DTEND', ''))
+                dtstart = component.get('DTSTART')
+                dtend = component.get('DTEND')
                 location = str(component.get('LOCATION', ''))
-                description = str(component.get('DESCRIPTION', ''))
                 status = str(component.get('STATUS', ''))
 
-                # Create signature tuple (excluding DTSTAMP, CREATED, LAST-MODIFIED)
-                signature = (uid, summary, dtstart, dtend, location, description, status)
-                signatures.add(signature)
+                # Extract type from description if available
+                description = str(component.get('DESCRIPTION', ''))
+                event_type = 'NORMAL'
+                if 'EXAM' in summary or 'KA:' in summary:
+                    event_type = 'EXAM'
 
-        return signatures
+                event_map[uid] = {
+                    'summary': summary,
+                    'dtstart': dtstart,
+                    'dtend': dtend,
+                    'location': location,
+                    'status': status,
+                    'type': event_type,
+                    'description': description
+                }
+
+        return event_map
+
+    def _format_event_for_discord(self, event_data: dict, old_data: dict = None) -> str:
+        """
+        Format event data into a readable string for Discord
+
+        Args:
+            event_data: Dictionary with event details (summary, dtstart, location, status, type)
+            old_data: Optional old event data to show what changed
+
+        Returns:
+            Formatted string
+        """
+        summary = event_data.get('summary', 'Unknown')
+        dtstart = event_data.get('dtstart')
+        location = event_data.get('location', '')
+        status = event_data.get('status', '')
+        event_type = event_data.get('type', '')
+
+        # Format datetime
+        formatted = f"**{summary}**"
+        try:
+            if hasattr(dtstart, 'dt'):
+                dt = dtstart.dt
+                formatted += f" - {dt.day:02d}.{dt.month:02d}.{dt.year} {dt.hour:02d}:{dt.minute:02d}"
+            elif dtstart:
+                formatted += f" - {str(dtstart)}"
+        except:
+            pass
+
+        if location and location != 'None':
+            formatted += f" ({location})"
+
+        # Add change info if old data provided
+        if old_data:
+            changes = []
+            if old_data.get('status') != status:
+                changes.append(f"Status: `{old_data.get('status')}` → `{status}`")
+            if old_data.get('type') != event_type:
+                changes.append(f"Type: `{old_data.get('type')}` → `{event_type}`")
+
+            if changes:
+                formatted += "\n  " + ", ".join(changes)
+
+        return formatted
 
     def send_discord_notification(self, webhook_url: str, message: str, changes_summary: dict = None):
         """
@@ -378,12 +433,7 @@ class WebUntisCalendarSync:
             webhook_url: Discord webhook URL
             message: Main message to send
             changes_summary: Optional dictionary with change details including:
-                - regular_events: total count
-                - exams: total count
-                - regular_added: number added
-                - regular_removed: number removed
-                - exams_added: number added
-                - exams_removed: number removed
+                - changed_events: list of (uid, old_data, new_data) tuples
         """
         try:
             payload = {
@@ -391,33 +441,34 @@ class WebUntisCalendarSync:
                 "embeds": []
             }
 
-            if changes_summary:
+            if changes_summary and changes_summary.get('changed_events'):
                 embed = {
                     "title": "📅 WebUntis Calendar Update",
-                    "color": 3447003,  # Blue color
+                    "color": 15158332,  # Red color for changes
                     "fields": [],
                     "timestamp": datetime.now().isoformat()
                 }
 
-                if changes_summary.get('regular_events') is not None:
-                    value = f"**Total:** {changes_summary['regular_events']} events"
-                    if changes_summary.get('regular_added') is not None:
-                        value += f"\n+{changes_summary['regular_added']} added, -{changes_summary['regular_removed']} removed"
-                    embed["fields"].append({
-                        "name": "📚 Regular Events",
-                        "value": value,
-                        "inline": False
-                    })
+                changed_events = changes_summary['changed_events']
+                total_changes = len(changed_events)
 
-                if changes_summary.get('exams') is not None:
-                    value = f"**Total:** {changes_summary['exams']} exams"
-                    if changes_summary.get('exams_added') is not None:
-                        value += f"\n+{changes_summary['exams_added']} added, -{changes_summary['exams_removed']} removed"
-                    embed["fields"].append({
-                        "name": "✏️ Exams (Klassenarbeiten)",
-                        "value": value,
-                        "inline": False
-                    })
+                value = f"**{total_changes} event(s) changed:**\n\n"
+
+                # Show details if less than 5 changes
+                if total_changes < 5:
+                    for uid, old_data, new_data in changed_events[:5]:
+                        value += f"• {self._format_event_for_discord(new_data, old_data)}\n"
+                else:
+                    # Show first 3 and mention there are more
+                    for uid, old_data, new_data in changed_events[:3]:
+                        value += f"• {self._format_event_for_discord(new_data, old_data)}\n"
+                    value += f"\n... and {total_changes - 3} more changes"
+
+                embed["fields"].append({
+                    "name": "⚠️ Changed Events",
+                    "value": value,
+                    "inline": False
+                })
 
                 payload["embeds"].append(embed)
 
@@ -463,15 +514,14 @@ class WebUntisCalendarSync:
             return False
 
         # Check if old files exist for change detection
-        old_calendar_signatures = None
-        old_exams_signatures = None
+        old_event_map = {}
 
         if os.path.exists(output_file):
             try:
                 with open(output_file, 'rb') as f:
                     old_cal = Calendar.from_ical(f.read())
-                    old_calendar_signatures = self._get_event_signatures(old_cal)
-                    print(f"✓ Loaded {len(old_calendar_signatures)} events from old calendar")
+                    old_event_map.update(self._get_event_map(old_cal))
+                    print(f"✓ Loaded {len(self._get_event_map(old_cal))} events from old calendar")
             except Exception as e:
                 print(f"⚠ Could not parse old calendar file: {e}")
 
@@ -479,8 +529,8 @@ class WebUntisCalendarSync:
             try:
                 with open(exams_output_file, 'rb') as f:
                     old_exams_cal = Calendar.from_ical(f.read())
-                    old_exams_signatures = self._get_event_signatures(old_exams_cal)
-                    print(f"✓ Loaded {len(old_exams_signatures)} exams from old exams calendar")
+                    old_event_map.update(self._get_event_map(old_exams_cal))
+                    print(f"✓ Loaded {len(self._get_event_map(old_exams_cal))} exams from old exams calendar")
             except Exception as e:
                 print(f"⚠ Could not parse old exams file: {e}")
 
@@ -500,60 +550,42 @@ class WebUntisCalendarSync:
         self.save_ical(exams_calendar, exams_output_file)
 
         # Check for changes and send Discord notification if needed
-        if discord_webhook:
-            calendar_changed = False
-            exams_changed = False
+        if discord_webhook and old_event_map:
+            # Get new event maps
+            new_event_map = {}
+            new_event_map.update(self._get_event_map(calendar))
+            new_event_map.update(self._get_event_map(exams_calendar))
 
-            # Get new event signatures
-            new_calendar_signatures = self._get_event_signatures(calendar)
-            new_exams_signatures = self._get_event_signatures(exams_calendar)
+            # Find changed events (status or type changed)
+            changed_events = []
+            for uid, new_data in new_event_map.items():
+                if uid in old_event_map:
+                    old_data = old_event_map[uid]
+                    # Check if status or type changed
+                    if (old_data.get('status') != new_data.get('status') or
+                        old_data.get('type') != new_data.get('type')):
+                        changed_events.append((uid, old_data, new_data))
 
-            # Compare signatures (ignoring timestamps)
-            regular_added = 0
-            regular_removed = 0
-            exams_added = 0
-            exams_removed = 0
-
-            if old_calendar_signatures is None or old_calendar_signatures != new_calendar_signatures:
-                calendar_changed = True
-                if old_calendar_signatures is not None:
-                    regular_added = len(new_calendar_signatures - old_calendar_signatures)
-                    regular_removed = len(old_calendar_signatures - new_calendar_signatures)
-                    print(f"\n📊 Regular events changes: +{regular_added} added, -{regular_removed} removed")
-
-            if old_exams_signatures is None or old_exams_signatures != new_exams_signatures:
-                exams_changed = True
-                if old_exams_signatures is not None:
-                    exams_added = len(new_exams_signatures - old_exams_signatures)
-                    exams_removed = len(old_exams_signatures - new_exams_signatures)
-                    print(f"📊 Exams changes: +{exams_added} added, -{exams_removed} removed")
-
-            if calendar_changed or exams_changed:
-                # Count events
-                regular_event_count = len(new_calendar_signatures)
-                exam_count = len(new_exams_signatures)
+            if changed_events:
+                print(f"\n⚠️ Found {len(changed_events)} event(s) with status/type changes")
+                for uid, old_data, new_data in changed_events:
+                    print(f"  - {new_data.get('summary')}: ", end="")
+                    changes = []
+                    if old_data.get('status') != new_data.get('status'):
+                        changes.append(f"Status {old_data.get('status')} → {new_data.get('status')}")
+                    if old_data.get('type') != new_data.get('type'):
+                        changes.append(f"Type {old_data.get('type')} → {new_data.get('type')}")
+                    print(", ".join(changes))
 
                 changes_summary = {
-                    'regular_events': regular_event_count,
-                    'exams': exam_count,
-                    'regular_added': regular_added if old_calendar_signatures is not None else None,
-                    'regular_removed': regular_removed if old_calendar_signatures is not None else None,
-                    'exams_added': exams_added if old_exams_signatures is not None else None,
-                    'exams_removed': exams_removed if old_exams_signatures is not None else None
+                    'changed_events': changed_events
                 }
 
-                message = "🔔 WebUntis calendar has been updated!"
-                if calendar_changed and exams_changed:
-                    message += " Both regular events and exams have changed."
-                elif calendar_changed:
-                    message += " Regular events have changed."
-                elif exams_changed:
-                    message += " Exams have changed."
-
+                message = "⚠️ WebUntis events have changed!"
                 print("\nDetected changes in calendar - sending Discord notification...")
                 self.send_discord_notification(discord_webhook, message, changes_summary)
             else:
-                print("\nNo changes detected - skipping Discord notification")
+                print("\nNo status/type changes detected - skipping Discord notification")
 
         print("\n" + "=" * 60)
         print("✓ Sync completed successfully!")
