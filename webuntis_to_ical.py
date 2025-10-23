@@ -253,16 +253,25 @@ class WebUntisCalendarSync:
 
                 # Get subject
                 position2 = entry.get('position2', [])
-                subject = position2[0]['current']['shortName'] if position2 else 'Unknown'
-                subject_long = position2[0]['current']['longName'] if position2 else subject
+                subject = 'Unknown'
+                subject_long = 'Unknown'
+                if position2 and position2[0].get('current'):
+                    subject = position2[0]['current'].get('shortName', 'Unknown')
+                    subject_long = position2[0]['current'].get('longName', subject)
 
                 # Get teacher
                 position1 = entry.get('position1', [])
-                teachers = ', '.join([p['current']['shortName'] for p in position1]) if position1 else ''
+                teachers = ', '.join([
+                    p['current']['shortName']
+                    for p in position1
+                    if p.get('current') and p['current'].get('shortName')
+                ]) if position1 else ''
 
                 # Get room
                 position3 = entry.get('position3', [])
-                room = position3[0]['current']['shortName'] if position3 else ''
+                room = ''
+                if position3 and position3[0].get('current'):
+                    room = position3[0]['current'].get('shortName', '')
 
                 # Get status and type
                 status = entry.get('status', 'REGULAR')
