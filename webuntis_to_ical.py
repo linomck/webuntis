@@ -342,6 +342,34 @@ class WebUntisCalendarSync:
             f.write(calendar.to_ical())
         print(f"✓ Saved calendar to: {filename}")
 
+    def _get_event_signatures(self, calendar: Calendar) -> set:
+        """
+        Extract event signatures (excluding timestamps) for comparison
+
+        Args:
+            calendar: Calendar object
+
+        Returns:
+            Set of event signatures (tuples of UID, SUMMARY, DTSTART, DTEND, LOCATION, DESCRIPTION)
+        """
+        signatures = set()
+
+        for component in calendar.walk():
+            if component.name == 'VEVENT':
+                uid = str(component.get('UID', ''))
+                summary = str(component.get('SUMMARY', ''))
+                dtstart = str(component.get('DTSTART', ''))
+                dtend = str(component.get('DTEND', ''))
+                location = str(component.get('LOCATION', ''))
+                description = str(component.get('DESCRIPTION', ''))
+                status = str(component.get('STATUS', ''))
+
+                # Create signature tuple (excluding DTSTAMP, CREATED, LAST-MODIFIED)
+                signature = (uid, summary, dtstart, dtend, location, description, status)
+                signatures.add(signature)
+
+        return signatures
+
     def send_discord_notification(self, webhook_url: str, message: str, changes_summary: dict = None):
         """
         Send a notification to Discord webhook
@@ -349,7 +377,13 @@ class WebUntisCalendarSync:
         Args:
             webhook_url: Discord webhook URL
             message: Main message to send
-            changes_summary: Optional dictionary with change details
+            changes_summary: Optional dictionary with change details including:
+                - regular_events: total count
+                - exams: total count
+                - regular_added: number added
+                - regular_removed: number removed
+                - exams_added: number added
+                - exams_removed: number removed
         """
         try:
             payload = {
@@ -365,18 +399,24 @@ class WebUntisCalendarSync:
                     "timestamp": datetime.now().isoformat()
                 }
 
-                if changes_summary.get('regular_events'):
+                if changes_summary.get('regular_events') is not None:
+                    value = f"**Total:** {changes_summary['regular_events']} events"
+                    if changes_summary.get('regular_added') is not None:
+                        value += f"\n+{changes_summary['regular_added']} added, -{changes_summary['regular_removed']} removed"
                     embed["fields"].append({
-                        "name": "Regular Events",
-                        "value": f"{changes_summary['regular_events']} events",
-                        "inline": True
+                        "name": "📚 Regular Events",
+                        "value": value,
+                        "inline": False
                     })
 
-                if changes_summary.get('exams'):
+                if changes_summary.get('exams') is not None:
+                    value = f"**Total:** {changes_summary['exams']} exams"
+                    if changes_summary.get('exams_added') is not None:
+                        value += f"\n+{changes_summary['exams_added']} added, -{changes_summary['exams_removed']} removed"
                     embed["fields"].append({
-                        "name": "Exams (Klassenarbeiten)",
-                        "value": f"{changes_summary['exams']} exams",
-                        "inline": True
+                        "name": "✏️ Exams (Klassenarbeiten)",
+                        "value": value,
+                        "inline": False
                     })
 
                 payload["embeds"].append(embed)
@@ -423,19 +463,26 @@ class WebUntisCalendarSync:
             return False
 
         # Check if old files exist for change detection
-        old_calendar_exists = os.path.exists(output_file)
-        old_exams_exists = os.path.exists(exams_output_file)
+        old_calendar_signatures = None
+        old_exams_signatures = None
 
-        old_calendar_content = None
-        old_exams_content = None
+        if os.path.exists(output_file):
+            try:
+                with open(output_file, 'rb') as f:
+                    old_cal = Calendar.from_ical(f.read())
+                    old_calendar_signatures = self._get_event_signatures(old_cal)
+                    print(f"✓ Loaded {len(old_calendar_signatures)} events from old calendar")
+            except Exception as e:
+                print(f"⚠ Could not parse old calendar file: {e}")
 
-        if old_calendar_exists:
-            with open(output_file, 'rb') as f:
-                old_calendar_content = f.read()
-
-        if old_exams_exists:
-            with open(exams_output_file, 'rb') as f:
-                old_exams_content = f.read()
+        if os.path.exists(exams_output_file):
+            try:
+                with open(exams_output_file, 'rb') as f:
+                    old_exams_cal = Calendar.from_ical(f.read())
+                    old_exams_signatures = self._get_event_signatures(old_exams_cal)
+                    print(f"✓ Loaded {len(old_exams_signatures)} exams from old exams calendar")
+            except Exception as e:
+                print(f"⚠ Could not parse old exams file: {e}")
 
         # Convert to iCal - All events except exams
         print("\nConverting to iCal format (all events except exams)...")
@@ -457,23 +504,42 @@ class WebUntisCalendarSync:
             calendar_changed = False
             exams_changed = False
 
-            new_calendar_content = calendar.to_ical()
-            new_exams_content = exams_calendar.to_ical()
+            # Get new event signatures
+            new_calendar_signatures = self._get_event_signatures(calendar)
+            new_exams_signatures = self._get_event_signatures(exams_calendar)
 
-            if old_calendar_content is None or old_calendar_content != new_calendar_content:
+            # Compare signatures (ignoring timestamps)
+            regular_added = 0
+            regular_removed = 0
+            exams_added = 0
+            exams_removed = 0
+
+            if old_calendar_signatures is None or old_calendar_signatures != new_calendar_signatures:
                 calendar_changed = True
+                if old_calendar_signatures is not None:
+                    regular_added = len(new_calendar_signatures - old_calendar_signatures)
+                    regular_removed = len(old_calendar_signatures - new_calendar_signatures)
+                    print(f"\n📊 Regular events changes: +{regular_added} added, -{regular_removed} removed")
 
-            if old_exams_content is None or old_exams_content != new_exams_content:
+            if old_exams_signatures is None or old_exams_signatures != new_exams_signatures:
                 exams_changed = True
+                if old_exams_signatures is not None:
+                    exams_added = len(new_exams_signatures - old_exams_signatures)
+                    exams_removed = len(old_exams_signatures - new_exams_signatures)
+                    print(f"📊 Exams changes: +{exams_added} added, -{exams_removed} removed")
 
             if calendar_changed or exams_changed:
                 # Count events
-                regular_event_count = len([c for c in calendar.walk() if c.name == 'VEVENT'])
-                exam_count = len([c for c in exams_calendar.walk() if c.name == 'VEVENT'])
+                regular_event_count = len(new_calendar_signatures)
+                exam_count = len(new_exams_signatures)
 
                 changes_summary = {
                     'regular_events': regular_event_count,
-                    'exams': exam_count
+                    'exams': exam_count,
+                    'regular_added': regular_added if old_calendar_signatures is not None else None,
+                    'regular_removed': regular_removed if old_calendar_signatures is not None else None,
+                    'exams_added': exams_added if old_exams_signatures is not None else None,
+                    'exams_removed': exams_removed if old_exams_signatures is not None else None
                 }
 
                 message = "🔔 WebUntis calendar has been updated!"
